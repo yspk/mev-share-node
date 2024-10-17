@@ -56,15 +56,15 @@ create index sbundle_builder_sim_eff_gas_price_idx on sbundle_builder (sim_eff_g
 create index sbundle_builder_sim_profit_idx on sbundle_builder (sim_profit);
 create index sbundle_builder_inserted_at_idx on sbundle_builder (inserted_at);
 
-create table sbundle_builder_used
-(
-    block_id bigint references built_blocks (block_id) on delete cascade,
-    hash     bytea,
-    inserted boolean not null default false,
-    unique (block_id, hash)
-);
-
-create index sbundle_builder_used_block_hash_idx on sbundle_builder_used (hash);
+-- create table sbundle_builder_used
+-- (
+--     block_id bigint references built_blocks (block_id) on delete cascade,
+--     hash     bytea,
+--     inserted boolean not null default false,
+--     unique (block_id, hash)
+-- );
+--
+-- create index sbundle_builder_used_block_hash_idx on sbundle_builder_used (hash);
 
 
 create table sbundle_hint_history

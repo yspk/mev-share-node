@@ -167,16 +167,17 @@ func filterSpecialLogs(logs []*types.Log) (res []*types.Log) {
 		switch log.Topics[0] {
 		// for these logs leaking signature and address is enough to identify pool where swap happened
 		case uni2log, uni3log, curveLog:
-			removeLogFields(log)
+			//TODO why
+			//removeLogFields(log)
 			res = append(res, log)
 		// for balancer all swaps go through the same contract, so we also need to leak poolID (first indexed topic)
 		case balancerLog:
 			if len(log.Topics) < 2 {
 				continue
 			}
-			poolID := log.Topics[1]
-			removeLogFields(log)
-			log.Topics[1] = poolID
+			//poolID := log.Topics[1]
+			//removeLogFields(log)
+			//log.Topics[1] = poolID
 			res = append(res, log)
 		}
 	}

@@ -3,7 +3,6 @@ package mevshare
 import (
 	"context"
 	"encoding/json"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/redis/go-redis/v9"
 	"github.com/ybbus/jsonrpc/v3"
@@ -70,7 +69,7 @@ func (b *JSONRPCSimulationBackend) SimulateBundle(ctx context.Context, bundle *S
 	var result SimMevBundleResponse
 	// we need a hack here until mev_simBundle supports revertMode, we will treat revertMode=drop as canRevert=true so that bundle passes simulation
 	newBundle := replaceRevertModeForSimulation(bundle)
-	err := b.client.CallFor(ctx, &result, "mev_simBundle", newBundle, aux)
+	err := b.client.CallFor(ctx, &result, "eth_simBundle", newBundle, aux)
 	return &result, err
 }
 
