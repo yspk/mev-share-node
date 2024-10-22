@@ -1,9 +1,18 @@
 package mevshare
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
-	"net"
+	"fmt"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/flashbots/mev-share-node/metrics"
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"strings"
@@ -12,9 +21,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/flashbots/mev-share-node/metrics"
-	"github.com/ybbus/jsonrpc/v3"
-	"go.uber.org/zap"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,7 +43,7 @@ func parseBuilderAPI(api string) (BuilderAPI, error) {
 		return BuilderAPIRefundRecipient, nil
 	case "v0.1":
 		return BuilderAPIMevShareBeta1, nil
-	case "v0.1-replacement":
+	case "v0.1-auth":
 		return BuilderAPIMevShareBeta1Replacement, nil
 	default:
 		return 0, ErrInvalidBuilder
@@ -87,24 +94,11 @@ func LoadBuilderConfig(file string) (BuildersBackend, error) {
 			return BuildersBackend{}, err
 		}
 
-		cl := jsonrpc.NewClientWithOpts(builder.URL, &jsonrpc.RPCClientOpts{
-			HTTPClient: &http.Client{
-				Transport: &http.Transport{
-					DialContext: (&net.Dialer{
-						Timeout:   30 * time.Second,
-						KeepAlive: 30 * time.Second,
-					}).DialContext,
-					MaxIdleConns:          20, // since we have one client per host we may keep it pretty low
-					MaxIdleConnsPerHost:   20,
-					IdleConnTimeout:       30 * time.Second,
-					TLSHandshakeTimeout:   10 * time.Second,
-					ExpectContinueTimeout: 1 * time.Second,
-				},
-			},
-			CustomHeaders:      customHeaders,
-			AllowUnknownFields: false,
-			DefaultRequestID:   0,
-		})
+		cl, err := rpc.DialContext(context.Background(), builder.URL)
+		if err != nil {
+			return BuildersBackend{}, err
+		}
+
 		builderBackend := JSONRPCBuilderBackend{
 			Name:   strings.ToLower(builder.Name),
 			Client: cl,
@@ -133,12 +127,13 @@ func LoadBuilderConfig(file string) (BuildersBackend, error) {
 
 type JSONRPCBuilderBackend struct {
 	Name   string
-	Client jsonrpc.RPCClient
+	Client *rpc.Client
 	API    BuilderAPI
 	Delay  bool
+	Url    string
 }
 
-func (b *JSONRPCBuilderBackend) SendBundle(ctx context.Context, bundle *SendMevBundleArgs) (err error) {
+func (b *JSONRPCBuilderBackend) SendBundle(ctx context.Context, bundle *SendBundleArgs) (err error) {
 	startAt := time.Now()
 	metrics.IncBundleSentToBuilder(b.Name)
 	defer func() {
@@ -147,47 +142,26 @@ func (b *JSONRPCBuilderBackend) SendBundle(ctx context.Context, bundle *SendMevB
 			metrics.IncBundleSentToBuilderFailure(b.Name)
 		}
 	}()
+
 	switch b.API {
-	case BuilderAPIRefundRecipient:
-		refRec, err := ConvertBundleToRefundRecipient(bundle)
-		if err != nil {
-			return err
-		}
-		res, err := b.Client.Call(ctx, "eth_sendBundle", []SendRefundRecBundleArgs{refRec})
-		if err != nil {
-			return err
-		}
-		if res.Error != nil {
-			return res.Error
-		}
 	case BuilderAPIMevShareBeta1:
-		res, err := b.Client.Call(ctx, "mev_sendBundle", []SendMevBundleArgs{*bundle})
+		var hash common.Hash
+		err = b.Client.CallContext(ctx, &hash, "eth_sendBundle", *bundle)
 		if err != nil {
 			return err
 		}
-		if res.Error != nil {
-			return res.Error
-		}
+		return nil
 	case BuilderAPIMevShareBeta1Replacement:
-		res, err := b.Client.Call(ctx, "mev_sendBundle", []SendMevBundleArgs{*bundle})
+		_, err = RazorPost(bundle, b.Url)
 		if err != nil {
 			return err
 		}
-		if res.Error != nil {
-			return res.Error
-		}
+		return nil
 	}
 	return nil
 }
 
 func (b *JSONRPCBuilderBackend) CancelBundleByHash(ctx context.Context, hash common.Hash) error {
-	res, err := b.Client.Call(ctx, "mev_cancelBundleByHash", []common.Hash{hash})
-	if err != nil {
-		return err
-	}
-	if res.Error != nil {
-		return res.Error
-	}
 	return nil
 }
 
@@ -199,120 +173,59 @@ type BuildersBackend struct {
 
 // SendBundle sends a bundle to all builders.
 // Bundles are sent to all builders in parallel.
-func (b *BuildersBackend) SendBundle(ctx context.Context, logger *zap.Logger, bundle *SendMevBundleArgs, targetBlock uint64, shouldCancel bool) { //nolint:gocognit
+func (b *BuildersBackend) SendBundle(ctx context.Context, logger *zap.Logger, bundle *SendMevBundleArgs, sendExternalBuilders bool) { //nolint:gocognit
+	builderBundle := SendBundleArgs{
+		MaxBlockNumber: uint64(bundle.Inclusion.MaxBlock),
+	}
+
+	for _, v := range bundle.Body {
+		builderBundle.Txs = append(builderBundle.Txs, *v.Tx)
+		if v.CanRevert {
+			var tx types.Transaction
+			if err := tx.UnmarshalBinary(*v.Tx); err != nil {
+				logger.Error("failed to unmarshal transaction", zap.Error(err))
+				return
+			}
+			builderBundle.RevertingTxHashes = append(builderBundle.RevertingTxHashes, tx.Hash())
+		}
+	}
+
 	var wg sync.WaitGroup
-	isFirstBlock := uint64(bundle.Inclusion.BlockNumber) == targetBlock
 
-	isReplaceable := bundle.ReplacementUUID != ""
-	// clean metadata, privacy, inclusion
-	args := *bundle
-	args.Inclusion.BlockNumber = hexutil.Uint64(targetBlock)
-	args.Inclusion.MaxBlock = hexutil.Uint64(targetBlock)
-	var signingAddress common.Address
-	if args.Metadata != nil {
-		signingAddress = args.Metadata.Signer
-	}
-	if signingAddress == (common.Address{}) {
-		logger.Warn("No signing address provided for bundle")
-	}
-	logger = logger.With(zap.Bool("shouldCancel", shouldCancel))
-	var builders []string
-	if args.Privacy != nil {
-		// it should already be cleaned while matching, but just in case we do it again here
-		MergePrivacyBuilders(&args)
-		builders = args.Privacy.Builders
-	}
-	cleanBundle(&args)
-
-	// for internal builders send signing_address
-	iArgs := &SendMevBundleArgs{
-		Version:         args.Version,
-		Inclusion:       args.Inclusion,
-		Body:            args.Body,
-		Validity:        args.Validity,
-		Privacy:         args.Privacy,
-		ReplacementUUID: bundle.ReplacementUUID,
-		Metadata: &MevBundleMetadata{
-			Signer:           signingAddress,
-			ReplacementNonce: bundle.Metadata.ReplacementNonce,
-			Cancelled:        shouldCancel,
-		},
-	}
 	// always send to internal builders
 	internalBuildersSuccess := make([]bool, len(b.internalBuilders))
 	for idx, builder := range b.internalBuilders {
-		// if bundle needs to be replaceable, only send to builders that support replacement
-		if isReplaceable && builder.API != BuilderAPIMevShareBeta1Replacement {
-			internalBuildersSuccess[idx] = true
-			continue
-		}
-		// if address only allows sending to replacement supporting builders we skip
-		if strings.ToLower(iArgs.Metadata.Signer.String()) == strings.ToLower(b.RestrictedAddress) && builder.API != BuilderAPIMevShareBeta1Replacement {
-			logger.Debug("Skipping restricted address", zap.String("restrictedAddress", b.RestrictedAddress))
-			internalBuildersSuccess[idx] = true
-			continue
-		}
 		wg.Add(1)
 		go func(builder JSONRPCBuilderBackend, idx int) {
 			defer wg.Done()
-			if builder.Delay && isFirstBlock {
-				// mark as success
-				logger.Debug("Skipping builder due to delay", zap.String("builder", builder.Name), zap.Uint64("blockNumber", uint64(bundle.Inclusion.BlockNumber)), zap.Uint64("targetBlock", targetBlock))
-				internalBuildersSuccess[idx] = true
-				return
-			}
 
 			start := time.Now()
-			err := builder.SendBundle(ctx, iArgs)
-			now := time.Now()
-			logger.Debug("Sent bundle to internal builder", zap.String("builder", builder.Name), zap.Duration("duration", time.Since(start)), zap.Error(err), zap.Time("time", now), zap.Int64("timestamp", now.Unix()))
+			err := builder.SendBundle(ctx, &builderBundle)
+			logger.Info("Sent bundle to internal builder", zap.String("builder", builder.Name), zap.Duration("duration", time.Since(start)))
 
 			if err != nil {
-				logger.Warn("Failed to send bundle to internal builder", zap.Error(err), zap.String("builder", builder.Name), zap.Time("time", now), zap.Int64("timestamp", now.Unix()))
+				logger.Warn("Failed to send bundle to internal builder", zap.Error(err), zap.String("builder", builder.Name))
 			} else {
 				internalBuildersSuccess[idx] = true
 			}
 		}(builder, idx)
 	}
 
-	if len(builders) > 0 {
-		buildersUsed := make(map[string]struct{})
-		for _, target := range builders {
-			// if bundle needs to be replaceable, only send to builders that support replacement
+	//如果交易5min还未上链，就向备份builder发送交易
+	if sendExternalBuilders {
+		for name, builder := range b.externalBuilders {
+			wg.Add(1)
+			go func(builder JSONRPCBuilderBackend, name string) {
+				defer wg.Done()
 
-			target = strings.ToLower(target)
+				start := time.Now()
+				err := builder.SendBundle(ctx, &builderBundle)
+				logger.Info("Sent bundle to external builder", zap.String("builder", builder.Name), zap.Duration("duration", time.Since(start)))
 
-			if target == "default" || target == "flashbots" {
-				// right now we always send to flashbots and default means flashbots
-				continue
-			}
-			if _, ok := buildersUsed[target]; ok {
-				continue
-			}
-			buildersUsed[target] = struct{}{}
-			if builder, ok := b.externalBuilders[target]; ok {
-				if isReplaceable && builder.API != BuilderAPIMevShareBeta1Replacement {
-					continue
+				if err != nil {
+					logger.Warn("Failed to send bundle to external builder", zap.Error(err), zap.String("builder", builder.Name))
 				}
-				wg.Add(1)
-				go func(builder JSONRPCBuilderBackend) {
-					if builder.Delay && isFirstBlock {
-						logger.Debug("Skipping builder due to delay", zap.String("builder", builder.Name), zap.Uint64("blockNumber", uint64(bundle.Inclusion.BlockNumber)), zap.Uint64("targetBlock", targetBlock))
-						return
-					}
-					defer wg.Done()
-					start := time.Now()
-					err := builder.SendBundle(ctx, &args)
-					now := time.Now()
-					logger.Debug("Sent bundle to external builder", zap.String("builder", builder.Name), zap.Duration("duration", time.Since(start)), zap.Error(err), zap.Time("time", now), zap.Int64("timestamp", now.Unix()))
-
-					if err != nil {
-						logger.Warn("Failed to send bundle to external builder", zap.Error(err), zap.String("builder", builder.Name), zap.Time("time", now), zap.Int64("timestamp", now.Unix()))
-					}
-				}(builder)
-			} else {
-				logger.Warn("Unknown external builder", zap.String("builder", target))
-			}
+			}(builder, name)
 		}
 	}
 
@@ -330,27 +243,66 @@ func (b *BuildersBackend) SendBundle(ctx context.Context, logger *zap.Logger, bu
 	}
 }
 
-func (b *BuildersBackend) CancelBundleByHash(ctx context.Context, logger *zap.Logger, hash common.Hash) {
-	var wg sync.WaitGroup
-	// we cancel bundle only in the internal builders, external cancellations are not supported
-	for _, builder := range b.internalBuilders {
-		wg.Add(1)
-		go func(builder JSONRPCBuilderBackend) {
-			err := builder.CancelBundleByHash(ctx, hash)
-			if err != nil {
-				logger.Warn("Failed to cancel bundle on the internal builder", zap.Error(err), zap.String("builder", builder.Name))
-			}
-		}(builder)
-	}
-	wg.Wait()
+func (b *BuildersBackend) CancelBundleByHash(ctx context.Context, logger log.Logger, hash common.Hash) {
 }
 
-func cleanBundle(bundle *SendMevBundleArgs) {
-	for _, el := range bundle.Body {
-		if el.Bundle != nil {
-			cleanBundle(el.Bundle)
-		}
+type SendBundleArgs struct {
+	Txs               []hexutil.Bytes `json:"txs"`
+	MaxBlockNumber    uint64          `json:"maxBlockNumber"`
+	MinTimestamp      *uint64         `json:"minTimestamp,omitempty"`
+	MaxTimestamp      *uint64         `json:"maxTimestamp,omitempty"`
+	RevertingTxHashes []common.Hash   `json:"revertingTxHashes,omitempty"`
+}
+
+type RazorRpcRequest struct {
+	Jsonrpc string           `json:"jsonrpc"`
+	Id      string           `json:"id"`
+	Method  string           `json:"method"`
+	Params  []SendBundleArgs `json:"params"`
+}
+
+type Response struct {
+	Jsonrpc string `json:"jsonrpc"`
+	Id      string `json:"id"`
+	Result  string `json:"result"`
+}
+
+func RazorPost(arg *SendBundleArgs, url string) (*common.Hash, error) {
+	jsonReq := RazorRpcRequest{
+		Jsonrpc: "2.0",
+		Id:      uuid.NewString(),
+		Method:  "eth_sendBundle",
 	}
-	bundle.Privacy = nil
-	bundle.Metadata = nil
+	jsonReq.Params = append(jsonReq.Params, *arg)
+	jdata, _ := json.Marshal(jsonReq)
+	body := bytes.NewReader(jdata)
+	//transCfg := &http.Transport{
+	//	TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // disable verify
+	//}
+	//// Create Http Client
+	//client := &http.Client{Transport: transCfg}
+	client := &http.Client{}
+	req, _ := http.NewRequest("POST", url, body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "qsO5yGyH8JAXPyuyYEhPYveyf9pd9qlqyBsrs4CSRgFlu4jAfLcFukU4FuctlAxiPjFb8dKTldOCNeorGxFIrTSXNsnI7sVH")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Println("client.Do:", err)
+		return nil, err
+	}
+
+	defer resp.Body.Close()
+	rb, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println("ReadAll:", err)
+		return nil, err
+	}
+	var response Response
+	if err = json.Unmarshal(rb, &response); err != nil {
+		fmt.Println("Unmarshal:", err)
+		return nil, err
+	}
+	hash := common.HexToHash(response.Result)
+	return &hash, nil
 }

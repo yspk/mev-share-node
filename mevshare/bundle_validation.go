@@ -2,6 +2,7 @@ package mevshare
 
 import (
 	"errors"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -103,19 +104,25 @@ func validateBundleInner(level int, bundle *SendMevBundleArgs, currentBlock uint
 	if bundle.Inclusion.MaxBlock == 0 {
 		bundle.Inclusion.MaxBlock = bundle.Inclusion.BlockNumber
 	}
-	minBlock := uint64(bundle.Inclusion.BlockNumber)
-	maxBlock := uint64(bundle.Inclusion.MaxBlock)
-	if maxBlock < minBlock {
-		return hash, txs, unmatched, ErrInvalidInclusion
-	}
-	if (maxBlock - minBlock) > MaxBlockRange {
-		return hash, txs, unmatched, ErrInvalidInclusion
-	}
-	if currentBlock >= maxBlock {
-		return hash, txs, unmatched, ErrInvalidInclusion
-	}
-	if minBlock > currentBlock+MaxBlockOffset {
-		return hash, txs, unmatched, ErrInvalidInclusion
+	//允许都为0的请求发过来，以支持rpc-endpoint
+	if bundle.Inclusion.MaxBlock != 0 && bundle.Inclusion.BlockNumber != 0 {
+		minBlock := uint64(bundle.Inclusion.BlockNumber)
+		maxBlock := uint64(bundle.Inclusion.MaxBlock)
+		if maxBlock < minBlock {
+			return hash, txs, unmatched, ErrInvalidInclusion
+		}
+		if (maxBlock - minBlock) > MaxBlockRange {
+			return hash, txs, unmatched, ErrInvalidInclusion
+		}
+		if currentBlock >= maxBlock {
+			return hash, txs, unmatched, ErrInvalidInclusion
+		}
+		if minBlock > currentBlock+MaxBlockOffset {
+			return hash, txs, unmatched, ErrInvalidInclusion
+		}
+	} else {
+		bundle.Inclusion.BlockNumber = hexutil.Uint64(currentBlock)
+		bundle.Inclusion.MaxBlock = bundle.Inclusion.BlockNumber + 30
 	}
 
 	// validate body

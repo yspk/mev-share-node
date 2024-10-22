@@ -123,13 +123,13 @@ func (s *SimulationResultBackend) SimulatedBundle(ctx context.Context, bundle *S
 	}
 	// never send old (already replaced bundles) to builders, if sim failed and it's a bundle with replacementUUID we should force cancel it
 	// we also don't send single-tx bundles with zero priority fee
-	//if !isOldBundle && ((sim.Success && !isZeroFee) || (shouldCancel)) {
-	//	wg.Add(1)
-	//	go func() {
-	//		defer wg.Done()
-	//		s.builders.SendBundle(ctx, logger, bundle, uint64(sim.StateBlock)+1, shouldCancel)
-	//	}()
-	//}
+	if !isOldBundle && ((sim.Success && !isZeroFee) || (shouldCancel)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.builders.SendBundle(ctx, logger, bundle, shouldCancel)
+		}()
+	}
 
 	wg.Wait()
 	logger.Info("Bundle processed", zap.String("bundle", hash.Hex()), zap.Duration("duration", time.Since(start)))
