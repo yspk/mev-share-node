@@ -256,7 +256,7 @@ func validateBundleInner(level int, bundle *SendMevBundleArgs, currentBlock uint
 	matchingHasher := sha3.NewLegacyKeccak256()
 	matchingHasher.Write(hash[:])
 	matchingHash := common.BytesToHash(matchingHasher.Sum(nil))
-	bundle.Metadata.MatchingHash = matchingHash
+	bundle.Metadata.MatchingHash = matchingHash //bundle_hash再Hash一下
 
 	return hash, txs, unmatched, nil
 }

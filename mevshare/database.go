@@ -32,7 +32,7 @@ type DBSbundle struct {
 	SimSuccess         bool           `db:"sim_success"`
 	SimError           sql.NullString `db:"sim_error"`
 	SimulatedAt        sql.NullTime   `db:"simulated_at"`
-	SimEffGasPrice     sql.NullString `db:"sim_eff_gas_price"`
+	SimEffGasPrice     sql.NullString `db:"sim_eff_gas_price"` //Bundle平均GasPrice
 	SimProfit          sql.NullString `db:"sim_profit"`
 	SimRefundableValue sql.NullString `db:"sim_refundable_value"`
 	SimGasUsed         sql.NullInt64  `db:"sim_gas_used"`
