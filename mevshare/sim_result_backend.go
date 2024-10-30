@@ -47,24 +47,23 @@ func NewSimulationResultBackend(log *zap.Logger, hint HintBackend, builders Buil
 }
 
 func izZeroPriorityFeeTX(bundle *SendMevBundleArgs) bool {
-	if len(bundle.Body) != 1 {
-		return false // not a single tx bundle
-	}
-	if bundle.Body[0].Bundle != nil {
+	if bundle.Bundle != nil {
 		return false // bundle, not a single tx bundle
 	}
-	var tx types.Transaction
-	btx := bundle.Body[0]
-	if btx.Tx == nil {
+	if bundle.Txs == nil {
 		return false // incorrect bundle
 	}
-
-	err := tx.UnmarshalBinary(*btx.Tx)
-	if err != nil {
-		return false // incorrect bundle
+	for _, txData := range bundle.Txs {
+		var tx types.Transaction
+		err := tx.UnmarshalBinary(txData)
+		if err != nil {
+			return false // incorrect bundle
+		}
+		if tx.GasTipCap().Cmp(big.NewInt(0)) == 0 {
+			return true
+		}
 	}
-
-	return tx.GasTipCap().Cmp(big.NewInt(0)) == 0
+	return false
 }
 
 // SimulatedBundle is called when simulation is done
@@ -137,10 +136,7 @@ func (s *SimulationResultBackend) SimulatedBundle(ctx context.Context, bundle *S
 }
 
 func (s *SimulationResultBackend) ProcessHints(ctx context.Context, bundle *SendMevBundleArgs, sim *SimMevBundleResponse) error {
-	if bundle.Privacy == nil {
-		return nil
-	}
-	if !bundle.Privacy.Hints.HasHint(HintHash) {
+	if !bundle.Hints.HasHint(HintHash) {
 		return nil
 	}
 

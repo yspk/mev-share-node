@@ -119,61 +119,71 @@ const (
 	RevertModeFail  = "fail"
 )
 
+//type SendMevBundleArgs struct {
+//	Version         string             `json:"version"`
+//	ReplacementUUID string             `json:"replacementUuid,omitempty"`
+//	Inclusion       MevBundleInclusion `json:"inclusion"`
+//	Body            []MevBundleBody    `json:"body"`
+//	Validity        MevBundleValidity  `json:"validity"`
+//	Privacy         *MevBundlePrivacy  `json:"privacy,omitempty"`
+//	Metadata        *MevBundleMetadata `json:"metadata,omitempty"`
+//}
+
 type SendMevBundleArgs struct {
-	Version         string             `json:"version"`
-	ReplacementUUID string             `json:"replacementUuid,omitempty"`
-	Inclusion       MevBundleInclusion `json:"inclusion"`
-	Body            []MevBundleBody    `json:"body"`
-	Validity        MevBundleValidity  `json:"validity"`
-	Privacy         *MevBundlePrivacy  `json:"privacy,omitempty"`
-	Metadata        *MevBundleMetadata `json:"metadata,omitempty"`
+	Hash              *common.Hash       `json:"hash,omitempty"` //bundle hash
+	Txs               []hexutil.Bytes    `json:"txs"`
+	Bundle            *SendMevBundleArgs `json:"bundle,omitempty"`
+	RevertingTxHashes []common.Hash      `json:"revertingTxHashes,omitempty"`
+	MaxBlock          hexutil.Uint64     `json:"maxBlock,omitempty"`
+	Hints             HintIntent         `json:"hints,omitempty"`
+	RefundAddress     common.Address     `json:"refundAddress,omitempty"`
+	RefundPercent     hexutil.Uint       `json:"refundPercent,omitempty"`
+	Metadata          *MevBundleMetadata `json:"metadata,omitempty"`
 }
 
-type ReplacementData struct {
-	ReplacementUUID  string `json:"replacementUuid"`
-	ReplacementNonce uint64 `json:"replacementNonce"`
-	Cancelled        bool   `json:"cancelled"`
-}
+//type ReplacementData struct {
+//	ReplacementUUID  string `json:"replacementUuid"`
+//	ReplacementNonce uint64 `json:"replacementNonce"`
+//	Cancelled        bool   `json:"cancelled"`
+//}
 
-type MevBundleInclusion struct {
-	BlockNumber hexutil.Uint64 `json:"block"`
-	MaxBlock    hexutil.Uint64 `json:"maxBlock"`
-}
+//type MevBundleInclusion struct {
+//	BlockNumber hexutil.Uint64 `json:"block"`
+//	MaxBlock    hexutil.Uint64 `json:"maxBlock"`
+//}
 
-type MevBundleBody struct {
-	Hash       *common.Hash       `json:"hash,omitempty"`
-	Tx         *hexutil.Bytes     `json:"tx,omitempty"`
-	Bundle     *SendMevBundleArgs `json:"bundle,omitempty"`
-	CanRevert  bool               `json:"canRevert,omitempty"`
-	RevertMode string             `json:"revertMode,omitempty"`
-}
+//type MevBundleBody struct {
+//	Hash       *common.Hash       `json:"hash,omitempty"`
+//	Tx         *hexutil.Bytes     `json:"tx,omitempty"`
+//	Bundle     *SendMevBundleArgs `json:"bundle,omitempty"`
+//	CanRevert  bool               `json:"canRevert,omitempty"`
+//	RevertMode string             `json:"revertMode,omitempty"`
+//}
 
-type MevBundleValidity struct {
-	Refund       []RefundConstraint `json:"refund,omitempty"`
-	RefundConfig []RefundConfig     `json:"refundConfig,omitempty"`
-}
+//type MevBundleValidity struct {
+//	Refund       []RefundConstraint `json:"refund,omitempty"`
+//	RefundConfig []RefundConfig     `json:"refundConfig,omitempty"`
+//}
 
-type RefundConstraint struct {
-	BodyIdx int `json:"bodyIdx"`
-	Percent int `json:"percent"`
-}
+//type RefundConstraint struct {
+//	BodyIdx int `json:"bodyIdx"`
+//	Percent int `json:"percent"`
+//}
+//
+//type RefundConfig struct {
+//	Address common.Address `json:"address"`
+//	Percent int            `json:"percent"`
+//}
 
-type RefundConfig struct {
-	Address common.Address `json:"address"`
-	Percent int            `json:"percent"`
-}
-
-type MevBundlePrivacy struct {
-	Hints      HintIntent `json:"hints,omitempty"`
-	Builders   []string   `json:"builders,omitempty"`
-	WantRefund *int       `json:"wantRefund,omitempty"`
-}
+//type MevBundlePrivacy struct {
+//	Hints      HintIntent `json:"hints,omitempty"`
+//	Builders   []string   `json:"builders,omitempty"`
+//	WantRefund *int       `json:"wantRefund,omitempty"`
+//}
 
 type MevBundleMetadata struct {
 	BundleHash       common.Hash    `json:"bundleHash,omitempty"`
 	BodyHashes       []common.Hash  `json:"bodyHashes,omitempty"`
-	Signer           common.Address `json:"signer,omitempty"`
-	OriginID         string         `json:"originId,omitempty"`
 	ReceivedAt       hexutil.Uint64 `json:"receivedAt,omitempty"`
 	MatchingHash     common.Hash    `json:"matchingHash,omitempty"`
 	Prematched       bool           `json:"prematched"`

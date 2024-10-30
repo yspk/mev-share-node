@@ -207,8 +207,8 @@ func (b *DBBackend) InsertBundleForStats(ctx context.Context, bundle *SendMevBun
 	}
 	dbBundle.Hash = bundle.Metadata.BundleHash.Bytes()
 	dbBundle.MatchingHash = bundle.Metadata.MatchingHash.Bytes()
-	dbBundle.Signer = bundle.Metadata.Signer.Bytes()
-	dbBundle.AllowMatching = bundle.Privacy != nil && bundle.Privacy.Hints.HasHint(HintHash)
+	dbBundle.Signer = []byte{}
+	dbBundle.AllowMatching = bundle.Hints.HasHint(HintHash)
 	dbBundle.Prematched = bundle.Metadata.Prematched
 	dbBundle.Cancelled = false
 	dbBundle.ReceivedAt = time.UnixMicro(int64(bundle.Metadata.ReceivedAt))
@@ -228,8 +228,8 @@ func (b *DBBackend) InsertBundleForStats(ctx context.Context, bundle *SendMevBun
 	dbBundle.ExecError = sql.NullString{String: result.ExecError, Valid: result.ExecError != ""}
 	dbBundle.Revert = result.Revert
 
-	dbBundle.BodySize = len(bundle.Body)
-	dbBundle.OriginID = sql.NullString{String: bundle.Metadata.OriginID, Valid: bundle.Metadata.OriginID != ""}
+	dbBundle.BodySize = len(bundle.Txs)
+	dbBundle.OriginID = sql.NullString{String: "", Valid: false}
 
 	dbTx, err := b.db.BeginTxx(ctx, nil)
 	if err != nil {
@@ -302,14 +302,7 @@ func (b *DBBackend) InsertBundleForStats(ctx context.Context, bundle *SendMevBun
 	// insert body
 	bodyElements := make([]DBSbundleBody, len(bundle.Metadata.BodyHashes))
 	for i, hash := range bundle.Metadata.BodyHashes {
-		var bodyType int
-		if i < len(bundle.Body) {
-			if bundle.Body[i].Tx != nil {
-				bodyType = 1
-			} else if bundle.Body[i].Bundle != nil {
-				bodyType = 2
-			}
-		}
+		var bodyType int = 1
 		bodyElements[i] = DBSbundleBody{Hash: bundle.Metadata.BundleHash.Bytes(), ElementHash: hash.Bytes(), Idx: i, Type: bodyType}
 	}
 

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/flashbots/mev-share-node/metrics"
@@ -175,20 +174,10 @@ type BuildersBackend struct {
 // Bundles are sent to all builders in parallel.
 func (b *BuildersBackend) SendBundle(ctx context.Context, logger *zap.Logger, bundle *SendMevBundleArgs, sendExternalBuilders bool) { //nolint:gocognit
 	builderBundle := SendBundleArgs{
-		MaxBlockNumber: uint64(bundle.Inclusion.MaxBlock),
+		MaxBlockNumber: uint64(bundle.MaxBlock),
 	}
-
-	for _, v := range bundle.Body {
-		builderBundle.Txs = append(builderBundle.Txs, *v.Tx)
-		if v.CanRevert {
-			var tx types.Transaction
-			if err := tx.UnmarshalBinary(*v.Tx); err != nil {
-				logger.Error("failed to unmarshal transaction", zap.Error(err))
-				return
-			}
-			builderBundle.RevertingTxHashes = append(builderBundle.RevertingTxHashes, tx.Hash())
-		}
-	}
+	builderBundle.Txs = bundle.Txs
+	builderBundle.RevertingTxHashes = bundle.RevertingTxHashes
 
 	var wg sync.WaitGroup
 

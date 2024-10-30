@@ -115,7 +115,7 @@ func (q *SimQueue) ScheduleBundleSimulation(ctx context.Context, bundle *SendMev
 	if err != nil {
 		return err
 	}
-	return q.queue.Push(ctx, data, highPriority, uint64(bundle.Inclusion.BlockNumber), uint64(bundle.Inclusion.MaxBlock))
+	return q.queue.Push(ctx, data, highPriority, uint64(0), uint64(bundle.MaxBlock))
 }
 
 type SimulationWorker struct {
@@ -156,6 +156,7 @@ func (w *SimulationWorker) Process(ctx context.Context, data []byte, info simque
 		return simqueue.ErrProcessUnrecoverable
 	}
 
+	//TODO parse Bundle
 	result, err := w.simulationBackend.SimulateBundle(ctx, &bundle, nil)
 	if err != nil {
 		logger.Error("Failed to simulate matched bundle", zap.Error(err))
@@ -173,7 +174,6 @@ func (w *SimulationWorker) Process(ctx context.Context, data []byte, info simque
 		zap.String("exec_error", result.ExecError),
 		zap.String("revert", result.Revert.String()),
 		zap.Int("retries", info.Retries),
-		zap.String("replacement_uuid", bundle.ReplacementUUID),
 		zap.Uint64("replacement_nonce", bundle.Metadata.ReplacementNonce),
 	)
 	// mev-share-node knows that new block already arrived, but the node this worker connected to is lagging behind so we should retry
@@ -183,42 +183,10 @@ func (w *SimulationWorker) Process(ctx context.Context, data []byte, info simque
 	}
 
 	var isOldBundle bool
-	if bundle.ReplacementUUID != "" {
-		rnonce, err := w.replacementCache.GetReplacementNonce(ctx, bundle.Metadata.Signer.String(), bundle.ReplacementUUID)
-		if err != nil {
-			// better send bundle and let builder decide if it is appropriate, don't fail here
-			isOldBundle = false
-			logger.Error("Failed to get replacement nonce", zap.Error(err))
-		}
-		if err == nil && rnonce > bundle.Metadata.ReplacementNonce {
-			isOldBundle = true
-		}
-	}
 
-	shouldCancel := bundle.ReplacementUUID != "" && !result.Success
-	if shouldCancel {
-		logger.Info("Cancelling bundle", zap.String("replacement_uuid", bundle.ReplacementUUID))
-		w.backgroundWg.Add(1)
-		go func() {
-			defer w.backgroundWg.Done()
-			resCtx, cancel := context.WithTimeout(context.Background(), consumeSimulationTimeout)
-			defer cancel()
-			err = w.simRes.SimulatedBundle(resCtx, &bundle, result, info, shouldCancel, isOldBundle)
-			if err != nil {
-				w.log.Error("Failed to consume matched share bundle", zap.Error(err))
-			}
-		}()
-		max := bundle.Inclusion.MaxBlock
-		state := result.StateBlock
-		// If state block is N, that means simulation for target block N+1 was tried
-		if max != 0 && state != 0 && max > state+1 {
-			return simqueue.ErrProcessScheduleNextBlock
-		}
-		return nil
-	}
 	// Try to re-simulate bundle if it failed
 	if !result.Success && isErrorRecoverable(result.Error) {
-		max := bundle.Inclusion.MaxBlock
+		max := bundle.MaxBlock
 		state := result.StateBlock
 		// If state block is N, that means simulation for target block N+1 was tried
 		if max != 0 && state != 0 && max > state+1 {

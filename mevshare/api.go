@@ -3,11 +3,11 @@ package mevshare
 import (
 	"context"
 	"errors"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"math/rand"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/common/lru"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/flashbots/mev-share-node/adapters/redis"
@@ -60,7 +60,7 @@ type API struct {
 	spikeManager      *spike.Manager[*SendMevBundleArgs]
 	knownBundleCache  *lru.Cache[common.Hash, SendMevBundleArgs]
 	cancellationCache *RedisCancellationCache
-	replacementCache  *redis.ReplacementCache
+	//replacementCache  *redis.ReplacementCache
 }
 
 func NewAPI(
@@ -87,19 +87,8 @@ func NewAPI(
 		spikeManager:      sm,
 		knownBundleCache:  lru.NewCache[common.Hash, SendMevBundleArgs](bundleCacheSize),
 		cancellationCache: cancellationCache,
-		replacementCache:  replacementCache,
+		//replacementCache:  replacementCache,
 	}
-}
-
-func findAndReplace(strs []common.Hash, old, replacer common.Hash) bool {
-	var found bool
-	for i, str := range strs {
-		if str == old {
-			strs[i] = replacer
-			found = true
-		}
-	}
-	return found
 }
 
 func (m *API) SendBundle(ctx context.Context, bundle SendMevBundleArgs) (_ SendMevBundleResponse, err error) {
@@ -132,26 +121,16 @@ func (m *API) SendBundle(ctx context.Context, bundle SendMevBundleArgs) (_ SendM
 		}
 	}
 	m.knownBundleCache.Add(hash, bundle)
-
-	signerAddress := jsonrpcserver.GetSigner(ctx)
-	origin := jsonrpcserver.GetOrigin(ctx)
 	if bundle.Metadata == nil {
 		bundle.Metadata = &MevBundleMetadata{}
 	}
-	bundle.Metadata.Signer = signerAddress
 	bundle.Metadata.ReceivedAt = hexutil.Uint64(uint64(time.Now().UnixMicro()))
-	bundle.Metadata.OriginID = origin
 	bundle.Metadata.Prematched = !hasUnmatchedHash
 
 	metrics.RecordBundleValidationDuration(time.Since(validateBundleTime).Milliseconds())
 
 	if hasUnmatchedHash {
-		var unmatchedHash common.Hash
-		if len(bundle.Body) > 0 && bundle.Body[0].Hash != nil {
-			unmatchedHash = *bundle.Body[0].Hash
-		} else {
-			return SendMevBundleResponse{}, ErrInternalServiceError
-		}
+		var unmatchedHash common.Hash = *bundle.Hash
 		fetchUnmatchedTime := time.Now()
 		unmatchedBundle, err := m.spikeManager.GetResult(ctx, unmatchedHash.String())
 		metrics.RecordBundleFetchUnmatchedDuration(time.Since(fetchUnmatchedTime).Milliseconds())
@@ -160,37 +139,15 @@ func (m *API) SendBundle(ctx context.Context, bundle SendMevBundleArgs) (_ SendM
 			metrics.IncRPCCallFailure(SendBundleEndpointName)
 			return SendMevBundleResponse{}, ErrBackrunNotFound
 		}
-		if privacy := unmatchedBundle.Privacy; privacy == nil || !privacy.Hints.HasHint(HintHash) {
+		if !unmatchedBundle.Hints.HasHint(HintHash) {
 			// if the unmatched bundle have not configured privacy or has not set the hash hint
 			// then we cannot backrun it
 			logger.Error("unmatched bundle has no hash hint", zap.String("hash", unmatchedHash.Hex()))
 			return SendMevBundleResponse{}, ErrBackrunInvalidBundle
 		}
-		bundle.Body[0].Bundle = unmatchedBundle
-		bundle.Body[0].Hash = nil
-		// replace matching hash with actual bundle hash
-		findAndReplace(bundle.Metadata.BodyHashes, unmatchedHash, unmatchedBundle.Metadata.BundleHash)
-		// send 90 % of the refund to the unmatched bundle or the suggested refund if set
-		refundPercent := RefundPercent
-		if unmatchedBundle.Privacy != nil && unmatchedBundle.Privacy.WantRefund != nil {
-			refundPercent = *unmatchedBundle.Privacy.WantRefund
-		}
-		bundle.Validity.Refund = []RefundConstraint{{0, refundPercent}}
-		MergePrivacyBuilders(&bundle)
-		err = MergeInclusionIntervals(&bundle.Inclusion, unmatchedBundle.Inclusion)
-		if err != nil {
-			return SendMevBundleResponse{}, ErrBackrunInclusion
-		}
-	}
-
-	if bundle.ReplacementUUID != "" {
-		// todo: add replacementUUID validation
-		rNonce, err := m.replacementCache.IncReplacementNonce(ctx, signerAddress.String(), bundle.ReplacementUUID)
-		if err != nil {
-			logger.Error("Failed to increment replacement nonce", zap.Error(err))
-			return SendMevBundleResponse{}, ErrInternalServiceError
-		}
-		bundle.Metadata.ReplacementNonce = rNonce
+		bundle.Bundle = unmatchedBundle
+		bundle.Hash = nil
+		bundle.MaxBlock = MergeMaxBlock(bundle.MaxBlock, unmatchedBundle.MaxBlock)
 	}
 
 	metrics.IncSbundlesReceivedValid()

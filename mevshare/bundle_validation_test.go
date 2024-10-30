@@ -132,7 +132,7 @@ func TestMergeInclusionIntervals(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			bottomCopy := c.bottom
 			topCopy := c.top
-			err := MergeInclusionIntervals(&topCopy, bottomCopy)
+			err := MergeMaxBlock(&topCopy, bottomCopy)
 			if c.err != nil {
 				require.ErrorIs(t, err, c.err)
 			} else {

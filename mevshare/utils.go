@@ -126,7 +126,7 @@ func newerInclusion(old, newBundle *SendMevBundleArgs) bool {
 	if newBundle == nil {
 		return false
 	}
-	if old.Inclusion.MaxBlock < newBundle.Inclusion.MaxBlock {
+	if old.MaxBlock < newBundle.MaxBlock {
 		return true
 	}
 

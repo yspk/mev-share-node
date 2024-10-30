@@ -45,40 +45,34 @@ func extractTxHints(tx *types.Transaction, want HintIntent) (hint *TxHint) {
 	return hint
 }
 
-func extractHintsInner(bundle *SendMevBundleArgs, bundleLogs []SimMevBodyLogs) (logs []CleanLog, txs []TxHint, err error) {
+func extractHintsInner(bundle *SendMevBundleArgs, bundleLogs SimMevBodyLogs) (logs []CleanLog, txs []TxHint, err error) {
 	var want HintIntent = HintNone
-	if bundle.Privacy != nil {
-		want = bundle.Privacy.Hints
-	}
+	want = bundle.Hints
 	if !want.HasHint(HintHash) {
 		return logs, txs, nil
 	}
-	if len(bundleLogs) != len(bundle.Body) {
-		return nil, nil, ErrCannotExtractHints
-	}
 
-	for i, el := range bundle.Body {
-		if innerBundle := el.Bundle; innerBundle != nil {
-			innerLogs, innerTxs, err := extractHintsInner(innerBundle, bundleLogs[i].BundleLogs)
-			if err != nil {
-				return nil, nil, err
-			}
-			logs = append(logs, innerLogs...)
-			txs = append(txs, innerTxs...)
-		} else if txBytes := el.Tx; txBytes != nil {
-			if want.HasHint(HintLogs) {
-				logs = append(logs, cleanLogs(bundleLogs[i].TxLogs)...)
-			} else if want.HasHint(HintSpecialLogs) {
-				logs = append(logs, cleanLogs(filterSpecialLogs(bundleLogs[i].TxLogs))...)
-			}
+	if innerBundle := bundle.Bundle; innerBundle != nil {
+		innerLogs, innerTxs, err := extractHintsInner(innerBundle, bundleLogs.BundleLogs[0])
+		if err != nil {
+			return nil, nil, err
+		}
+		logs = append(logs, innerLogs...)
+		txs = append(txs, innerTxs...)
+	} else if bundleTxs := bundle.Txs; bundleTxs != nil {
+		if want.HasHint(HintLogs) {
+			logs = append(logs, cleanLogs(bundleLogs.TxLogs)...)
+		} else if want.HasHint(HintSpecialLogs) {
+			logs = append(logs, cleanLogs(filterSpecialLogs(bundleLogs.TxLogs))...)
+		}
 
-			// skip if we don't need any of the hints for individual txs
-			if !want.HasHint(HintContractAddress | HintFunctionSelector | HintCallData | HintTxHash) {
-				continue
-			}
-
+		// skip if we don't need any of the hints for individual txs
+		if !want.HasHint(HintContractAddress | HintFunctionSelector | HintCallData | HintTxHash) {
+			return logs, txs, nil
+		}
+		for _, txData := range bundleTxs {
 			var tx types.Transaction
-			err := tx.UnmarshalBinary(*txBytes)
+			err = tx.UnmarshalBinary(txData)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -89,16 +83,13 @@ func extractHintsInner(bundle *SendMevBundleArgs, bundleLogs []SimMevBodyLogs) (
 			}
 		}
 	}
+
 	return logs, txs, err
 }
 
 func ExtractHints(bundle *SendMevBundleArgs, simRes *SimMevBundleResponse, shareGasUsed, shareMevGasPrice bool) (Hint, error) {
 	var want HintIntent = HintNone
-	if bundle.Privacy != nil {
-		want = bundle.Privacy.Hints
-	} else {
-		return Hint{}, ErrCannotExtractHints
-	}
+	want = bundle.Hints
 	if !want.HasHint(HintHash) {
 		return Hint{}, ErrCannotExtractHints
 	}
@@ -121,7 +112,7 @@ func ExtractHints(bundle *SendMevBundleArgs, simRes *SimMevBundleResponse, share
 		return hint, ErrCannotExtractHints
 	}
 
-	logs, txs, err := extractHintsInner(bundle, simRes.BodyLogs)
+	logs, txs, err := extractHintsInner(bundle, simRes.BodyLogs[0])
 	if err != nil {
 		return hint, err
 	}
